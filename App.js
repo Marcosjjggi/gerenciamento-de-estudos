@@ -1,78 +1,159 @@
-import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, SafeAreaView, Alert } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, SafeAreaView, ActivityIndicator, Alert } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 import TimerDashboard from './src/screens/TimerDashboard';
 import Analytics from './src/screens/Analytics';
-
+import Schedule from './src/screens/Schedule';
+import TabBar from './src/components/TabBar';
+import { colors } from './src/theme/colors';
+import {
+  carregarDados,
+  salvarMaterias,
+  salvarHorarios,
+  salvarSessoes,
+} from './src/utils/storage';
+import { agendarHorarios } from './src/utils/notifications';
 import { styles } from './App.styles';
+
+const MATERIAS_INICIAIS = [
+  { id: '1', nome: 'Estrutura de Dados', minutos: 0 },
+  { id: '2', nome: 'Cálculo Diferencial', minutos: 0 },
+  { id: '3', nome: 'React Native', minutos: 0 },
+];
 
 export default function App() {
   const [abaAtiva, setAbaAtiva] = useState('timer');
+  const [carregando, setCarregando] = useState(true);
+  const [materias, setMaterias] = useState(MATERIAS_INICIAIS);
+  const [horarios, setHorarios] = useState([]);
+  const [sessoes, setSessoes] = useState([]);
 
-  // Estado global com dados simulados
-  const [materias, setMaterias] = useState([
-    { id: '1', nome: 'Estrutura de Dados', minutos: 45 },
-    { id: '2', nome: 'Cálculo Diferencial', minutos: 90 },
-    { id: '3', nome: 'React Native', minutos: 25 },
-    { id: '4', nome: 'Inteligência Artificial', minutos: 25 },
-    { id: '5', nome: 'Rede de Computadores', minutos: 25 },
-    { id: '6', nome: 'Programação para Internet', minutos: 25 },
-  ]);
+  const reagendarNotificacoes = useCallback(async (hrs, mats) => {
+    const resultado = await agendarHorarios(hrs, mats);
+    if (resultado.negado && hrs.some((h) => h.notificacaoAtiva)) {
+      Alert.alert(
+        'Notificações desativadas',
+        'Ative as permissões de notificação nas configurações do celular para receber lembretes de estudo.'
+      );
+    }
+  }, []);
 
-  // Função para cadastrar nova matéria
+  useEffect(() => {
+    (async () => {
+      const dados = await carregarDados();
+      if (dados.materias?.length) setMaterias(dados.materias);
+      setHorarios(dados.horarios);
+      setSessoes(dados.sessoes);
+      setCarregando(false);
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (carregando) return;
+    salvarMaterias(materias);
+  }, [materias, carregando]);
+
+  useEffect(() => {
+    if (carregando) return;
+    salvarHorarios(horarios);
+    reagendarNotificacoes(horarios, materias);
+  }, [horarios, materias, carregando, reagendarNotificacoes]);
+
+  useEffect(() => {
+    if (carregando) return;
+    salvarSessoes(sessoes);
+  }, [sessoes, carregando]);
+
   const adicionarMateria = (nomeDaMateria) => {
-    // Descobre o ID mais alto atual para somar + 1, ou começa do 1 se a lista estiver vazia
-    const proximoId = materias.length > 0 
-      ? (Math.max(...materias.map(m => parseInt(m.id))) + 1).toString() 
-      : '1';
-
-    const nova = {
-      id: proximoId, // Aqui sempre sempre somara o numero tipo 1 + 1 ai vai ser 2 depois +1 = 3 e por ai vai!
-      nome: nomeDaMateria,
-      minutos: 0
-    };
-    setMaterias([...materias, nova]);
+    const proximoId =
+      materias.length > 0
+        ? (
+            Math.max(...materias.map((m) => parseInt(m.id, 10))) + 1
+          ).toString()
+        : '1';
+    setMaterias([
+      ...materias,
+      { id: proximoId, nome: nomeDaMateria, minutos: 0 },
+    ]);
   };
 
-  // Função para excluir matéria (Requisito concluído!)
   const deletarMateria = (idMateria) => {
-    setMaterias(materias.filter(m => m.id !== idMateria));
-    Alert.alert("Sucesso 🎉", "Disciplina excluída com sucesso do aplicativo.");
+    setMaterias(materias.filter((m) => m.id !== idMateria));
+    setHorarios(horarios.filter((h) => h.materiaId !== idMateria));
   };
 
-  // Função para computar tempo no gráfico
   const registrarTempoEstudado = (idMateria, minutos) => {
-    setMaterias(materiasAtualizadas => 
-      materiasAtualizadas.map(m => m.id === idMateria ? { ...m, minutos: m.minutos + minutos } : m)
+    setMaterias((prev) =>
+      prev.map((m) =>
+        m.id === idMateria ? { ...m, minutos: m.minutos + minutos } : m
+      )
+    );
+    setSessoes((prev) => [
+      {
+        id: Date.now().toString(),
+        materiaId: idMateria,
+        minutos,
+        data: new Date().toISOString(),
+      },
+      ...prev,
+    ]);
+  };
+
+  const adicionarHorario = (dados) => {
+    const novo = {
+      id: Date.now().toString(),
+      ...dados,
+    };
+    setHorarios((prev) => [...prev, novo]);
+  };
+
+  const removerHorario = (id) => {
+    setHorarios((prev) => prev.filter((h) => h.id !== id));
+  };
+
+  const toggleNotificacaoHorario = (id, ativo) => {
+    setHorarios((prev) =>
+      prev.map((h) =>
+        h.id === id ? { ...h, notificacaoAtiva: ativo } : h
+      )
     );
   };
 
+  if (carregando) {
+    return (
+      <View style={styles.loading}>
+        <ActivityIndicator size="large" color={colors.primary} />
+        <StatusBar style="light" />
+      </View>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container}>
+      <StatusBar style="light" />
       <View style={styles.content}>
-        {abaAtiva === 'timer' ? (
-          <TimerDashboard 
-            listaMaterias={materias} 
+        {abaAtiva === 'timer' && (
+          <TimerDashboard
+            listaMaterias={materias}
             aoAdicionarMateria={adicionarMateria}
             aoConcluirFoco={registrarTempoEstudado}
             aoDeletarMateria={deletarMateria}
           />
-        ) : (
-          <Analytics listaMaterias={materias} />
+        )}
+        {abaAtiva === 'schedule' && (
+          <Schedule
+            listaMaterias={materias}
+            horarios={horarios}
+            aoAdicionarHorario={adicionarHorario}
+            aoRemoverHorario={removerHorario}
+            aoToggleNotificacao={toggleNotificacaoHorario}
+          />
+        )}
+        {abaAtiva === 'analytics' && (
+          <Analytics listaMaterias={materias} sessoes={sessoes} />
         )}
       </View>
-
-      {/* Navegação Inferior */}
-      <View style={styles.tabBar}>
-        <TouchableOpacity style={styles.tabItem} onPress={() => setAbaAtiva('timer')}>
-          <Text style={[styles.tabIcon, abaAtiva === 'timer' && styles.tabActive]}>⏱️</Text>
-          <Text style={[styles.tabLabel, abaAtiva === 'timer' && styles.tabActive]}>Timer</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.tabItem} onPress={() => setAbaAtiva('analytics')}>
-          <Text style={[styles.tabIcon, abaAtiva === 'analytics' && styles.tabActive]}>📊</Text>
-          <Text style={[styles.tabLabel, abaAtiva === 'analytics' && styles.tabActive]}>Estatísticas</Text>
-        </TouchableOpacity>
-      </View>
+      <TabBar abaAtiva={abaAtiva} aoMudarAba={setAbaAtiva} />
     </SafeAreaView>
   );
 }

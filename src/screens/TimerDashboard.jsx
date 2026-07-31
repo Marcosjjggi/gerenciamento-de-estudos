@@ -1,42 +1,84 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, TextInput, Modal, Alert } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  TextInput,
+  Modal,
+  Alert,
+  ScrollView,
+} from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
+import * as Notifications from 'expo-notifications';
 import { styles } from './TimerDashboard.styles';
+import { colors, getSubjectColor } from '../theme/colors';
 
-export default function TimerDashboard({ listaMaterias, aoAdicionarMateria, aoConcluirFoco, aoDeletarMateria }) {
-  const [materiaSelecionada, setMateriaSelecionada] = useState(listaMaterias[0] || { nome: 'Nenhuma' });
-  const [tempoInput, setTempoInput] = useState('25'); 
-  const [segundosRestantes, setSegundosRestantes] = useState(25 * 60); 
+const PRESETS = [15, 25, 45, 60, 90];
+
+export default function TimerDashboard({
+  listaMaterias,
+  aoAdicionarMateria,
+  aoConcluirFoco,
+  aoDeletarMateria,
+}) {
+  const [materiaSelecionada, setMateriaSelecionada] = useState(
+    listaMaterias[0] || { nome: 'Nenhuma' }
+  );
+  const [tempoInput, setTempoInput] = useState('25');
+  const [segundosRestantes, setSegundosRestantes] = useState(25 * 60);
   const [estaRodando, setEstaRodando] = useState(false);
   const [modalVisivel, setModalVisivel] = useState(false);
   const [novaMateriaNome, setNovaMateriaNome] = useState('');
+  const concluidoRef = useRef(false);
 
-  // Sincroniza o relógio com o input digitado
   useEffect(() => {
-    if (!estaRodando) {
-      const minutos = parseInt(tempoInput) || 0;
-      setSegundosRestantes(minutos * 60);
-    }
+    if (estaRodando) return;
+    const minutos = parseInt(tempoInput, 10) || 0;
+    setSegundosRestantes(minutos * 60);
   }, [tempoInput]);
 
-  // Atualiza a seleção caso a lista mude externamente (ex: deleção)
   useEffect(() => {
     if (listaMaterias.length > 0) {
-      const aindaExiste = listaMaterias.find(m => m.id === materiaSelecionada.id);
+      const aindaExiste = listaMaterias.find(
+        (m) => m.id === materiaSelecionada.id
+      );
       if (!aindaExiste) setMateriaSelecionada(listaMaterias[0]);
     } else {
       setMateriaSelecionada({ nome: 'Nenhuma' });
     }
   }, [listaMaterias]);
 
-  // Lógica de contagem
   useEffect(() => {
     let intervalo = null;
     if (estaRodando && segundosRestantes > 0) {
-      intervalo = setInterval(() => setSegundosRestantes(t => t - 1), 1000);
-    } else if (segundosRestantes === 0 && estaRodando) {
-      estaRodando(false);
-      aoConcluirFoco(materiaSelecionada.id, parseInt(tempoInput) || 25);
-      Alert.alert("Excelente trabalho! 🎉", `Sessão concluída em ${materiaSelecionada.nome}.`);
+      concluidoRef.current = false;
+      intervalo = setInterval(
+        () => setSegundosRestantes((t) => t - 1),
+        1000
+      );
+    } else if (segundosRestantes === 0 && estaRodando && !concluidoRef.current) {
+      concluidoRef.current = true;
+      setEstaRodando(false);
+      const minutos = parseInt(tempoInput, 10) || 25;
+      if (materiaSelecionada.id) {
+        aoConcluirFoco(materiaSelecionada.id, minutos);
+      }
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Notifications.scheduleNotificationAsync({
+        content: {
+          title: '🎉 Sessão concluída!',
+          body: `${minutos} min de foco em ${materiaSelecionada.nome}`,
+          sound: true,
+        },
+        trigger: null,
+      });
+      Alert.alert(
+        'Excelente trabalho!',
+        `Sessão de ${minutos} min concluída em ${materiaSelecionada.nome}.`
+      );
+      setSegundosRestantes(minutos * 60);
     }
     return () => clearInterval(intervalo);
   }, [estaRodando, segundosRestantes]);
@@ -47,106 +89,250 @@ export default function TimerDashboard({ listaMaterias, aoAdicionarMateria, aoCo
     return `${min.toString().padStart(2, '0')}:${seg.toString().padStart(2, '0')}`;
   };
 
-  const trocarMateria = () => {
-    if (estaRodando || listaMaterias.length === 0) return;
-    const indexAtual = listaMaterias.findIndex(m => m.id === materiaSelecionada.id);
-    const proximoIndex = (indexAtual + 1) % listaMaterias.length;
-    setMateriaSelecionada(listaMaterias[proximoIndex]);
-  };
+  const progresso =
+    parseInt(tempoInput, 10) > 0
+      ? 1 - segundosRestantes / (parseInt(tempoInput, 10) * 60)
+      : 0;
+
+  const materiaIndex = listaMaterias.findIndex(
+    (m) => m.id === materiaSelecionada.id
+  );
+  const corMateria = getSubjectColor(Math.max(materiaIndex, 0));
 
   const salvarNovaMateria = () => {
     if (!novaMateriaNome.trim()) return;
-    aoAdicionarMateria(novaMateriaNome);
+    aoAdicionarMateria(novaMateriaNome.trim());
     setNovaMateriaNome('');
     setModalVisivel(false);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  };
+
+  const toggleTimer = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setEstaRodando(!estaRodando);
+  };
+
+  const resetar = () => {
+    const totalSegundos = (parseInt(tempoInput, 10) || 25) * 60;
+    const segundosDecorridos = totalSegundos - segundosRestantes;
+
+    if (segundosDecorridos >= 30 && materiaSelecionada.id) {
+      const minutosEstudados = Math.ceil(segundosDecorridos / 60);
+      aoConcluirFoco(materiaSelecionada.id, minutosEstudados);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert(
+        'Tempo registrado',
+        `${minutosEstudados} min adicionados em ${materiaSelecionada.nome}.`
+      );
+    }
+
+    setEstaRodando(false);
+    setSegundosRestantes(totalSegundos);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.headerTitle}>Gerenciador de estudos ⏱️</Text>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+    >
+      <LinearGradient
+        colors={[colors.gradientStart, colors.bg]}
+        style={styles.headerGradient}
+      >
+        <Text style={styles.headerTitle}>Foco</Text>
+        <Text style={styles.headerSubtitle}>Timer Pomodoro inteligente</Text>
+      </LinearGradient>
 
-      {/* Alternar Matéria */}
-      <TouchableOpacity style={styles.card} onPress={trocarMateria}>
-        <Text style={styles.cardLabel}>Toque para alternar disciplina</Text>
-        <Text style={styles.cardValue}>📚 {materiaSelecionada.nome}</Text>
-      </TouchableOpacity>
+      {/* Seletor de matérias */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.materiasScroll}
+        contentContainerStyle={styles.materiasRow}
+      >
+        {listaMaterias.map((m, i) => {
+          const ativo = m.id === materiaSelecionada.id;
+          const cor = getSubjectColor(i);
+          return (
+            <TouchableOpacity
+              key={m.id}
+              style={[
+                styles.materiaChip,
+                ativo && { borderColor: cor, backgroundColor: cor + '25' },
+              ]}
+              onPress={() => {
+                if (!estaRodando) {
+                  setMateriaSelecionada(m);
+                  Haptics.selectionAsync();
+                }
+              }}
+              disabled={estaRodando}
+            >
+              <View style={[styles.materiaDot, { backgroundColor: cor }]} />
+              <Text
+                style={[
+                  styles.materiaChipText,
+                  ativo && { color: cor },
+                ]}
+              >
+                {m.nome}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+        <TouchableOpacity
+          style={styles.addChip}
+          onPress={() => setModalVisivel(true)}
+        >
+          <Ionicons name="add" size={20} color={colors.primary} />
+        </TouchableOpacity>
+      </ScrollView>
 
-      {/* Definir minutos */}
-      <View style={styles.card}>
-        <Text style={styles.cardLabel}>Quanto tempo deseja focar?</Text>
-        <View style={styles.inputRow}>
-          <TextInput 
-            style={styles.input}
-            keyboardType="number-pad"
-            value={tempoInput}
-            onChangeText={setTempoInput}
-            editable={!estaRodando}
+      {/* Timer circular */}
+      <View style={styles.timerWrapper}>
+        <View style={[styles.timerRingOuter, { borderColor: corMateria + '30' }]}>
+          <View
+            style={[
+              styles.timerRingProgress,
+              {
+                borderColor: corMateria,
+                borderTopColor: progresso > 0.25 ? corMateria : 'transparent',
+                borderRightColor: progresso > 0.5 ? corMateria : 'transparent',
+                borderBottomColor: progresso > 0.75 ? corMateria : 'transparent',
+              },
+            ]}
           />
-          <Text style={styles.inputUnit}>minutos</Text>
+          <View style={styles.timerCircle}>
+            <Text style={styles.timerText}>{formatarTempo()}</Text>
+            <Text style={styles.timerLabel}>
+              {estaRodando ? 'Em foco...' : 'Pronto'}
+            </Text>
+          </View>
         </View>
       </View>
 
-      {/* Relógio */}
-      <View style={styles.timerCircle}>
-        <Text style={styles.timerText}>{formatarTempo()}</Text>
-        <Text style={styles.activeMateriaTag}>{materiaSelecionada.nome}</Text>
+      {/* Presets de tempo */}
+      <View style={styles.presetRow}>
+        {PRESETS.map((p) => (
+          <TouchableOpacity
+            key={p}
+            style={[
+              styles.presetChip,
+              tempoInput === String(p) && styles.presetChipActive,
+            ]}
+            onPress={() => {
+              if (!estaRodando) setTempoInput(String(p));
+            }}
+            disabled={estaRodando}
+          >
+            <Text
+              style={[
+                styles.presetText,
+                tempoInput === String(p) && styles.presetTextActive,
+              ]}
+            >
+              {p}m
+            </Text>
+          </TouchableOpacity>
+        ))}
       </View>
 
-      {/* Grade de Botões */}
-      <View style={styles.buttonRow}>
-        <TouchableOpacity 
-          style={[styles.mainButton, estaRodando ? styles.btnPause : styles.btnStart]}
-          onPress={() => setEstaRodando(!estaRodando)}
-        >
-          <Text style={styles.buttonText}>{estaRodando ? 'Pausar' : 'Iniciar'}</Text>
+      <View style={styles.customTimeRow}>
+        <TextInput
+          style={styles.input}
+          keyboardType="number-pad"
+          value={tempoInput}
+          onChangeText={setTempoInput}
+          editable={!estaRodando}
+          maxLength={3}
+        />
+        <Text style={styles.inputUnit}>minutos personalizados</Text>
+      </View>
+
+      {/* Controles */}
+      <View style={styles.controls}>
+        <TouchableOpacity style={styles.btnSecondary} onPress={resetar}>
+          <Ionicons name="refresh" size={22} color={colors.textSecondary} />
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.btnReset} onPress={() => { setEstaRodando(false); setSegundosRestantes((parseInt(tempoInput) || 25) * 60); }}>
-          <Text style={styles.buttonText}>🔄</Text>
-        </TouchableOpacity>
-
-        {/* Botão de Excluir Matéria Ativa */}
-        <TouchableOpacity 
-          style={styles.btnDelete} 
-          onPress={() => {
-            if (estaRodando) return;
-            if (!materiaSelecionada.id) {
-              Alert.alert("Erro", "Nenhuma matéria para excluir.");
-              return;
+        <TouchableOpacity onPress={toggleTimer} style={styles.btnPrimaryWrap}>
+          <LinearGradient
+            colors={
+              estaRodando
+                ? [colors.warning, '#FF8C42']
+                : [colors.accent, '#00B88D']
             }
-            aoDeletarMateria(materiaSelecionada.id);
+            style={styles.btnPrimary}
+          >
+            <Ionicons
+              name={estaRodando ? 'pause' : 'play'}
+              size={28}
+              color="#FFF"
+            />
+            <Text style={styles.btnPrimaryText}>
+              {estaRodando ? 'Pausar' : 'Iniciar'}
+            </Text>
+          </LinearGradient>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.btnSecondary}
+          onPress={() => {
+            if (estaRodando || !materiaSelecionada.id) return;
+            Alert.alert(
+              'Excluir disciplina',
+              `Remover "${materiaSelecionada.nome}"?`,
+              [
+                { text: 'Cancelar', style: 'cancel' },
+                {
+                  text: 'Excluir',
+                  style: 'destructive',
+                  onPress: () => aoDeletarMateria(materiaSelecionada.id),
+                },
+              ]
+            );
           }}
         >
-          <Text style={styles.buttonText}>🗑️</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={[styles.btnReset, { backgroundColor: '#007AFF' }]} onPress={() => setModalVisivel(true)}>
-          <Text style={styles.buttonText}>➕</Text>
+          <Ionicons name="trash-outline" size={22} color={colors.danger} />
         </TouchableOpacity>
       </View>
 
-      {/* Cadastro de Matéria */}
       <Modal visible={modalVisivel} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Nova Disciplina</Text>
-            <TextInput 
+            <Text style={styles.modalTitle}>Nova disciplina</Text>
+            <TextInput
               style={styles.textInput}
-              placeholder="Nome da matéria..."
+              placeholder="Ex: Cálculo, React Native..."
+              placeholderTextColor={colors.textMuted}
               value={novaMateriaNome}
               onChangeText={setNovaMateriaNome}
+              autoFocus
             />
-            <View style={styles.buttonRow}>
-              <TouchableOpacity style={[styles.mainButton, { backgroundColor: '#007AFF' }]} onPress={salvarNovaMateria}>
-                <Text style={styles.buttonText}>Salvar</Text>
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={styles.btnCancelar}
+                onPress={() => setModalVisivel(false)}
+              >
+                <Text style={styles.btnCancelarText}>Cancelar</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.mainButton, { backgroundColor: '#FF3B30' }]} onPress={() => setModalVisivel(false)}>
-                <Text style={styles.buttonText}>Fechar</Text>
+              <TouchableOpacity
+                style={styles.btnSalvarWrap}
+                onPress={salvarNovaMateria}
+              >
+                <LinearGradient
+                  colors={[colors.primary, colors.primaryLight]}
+                  style={styles.btnSalvar}
+                >
+                  <Text style={styles.btnSalvarText}>Adicionar</Text>
+                </LinearGradient>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
-    </View>
+    </ScrollView>
   );
 }
